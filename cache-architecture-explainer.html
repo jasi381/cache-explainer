@@ -1,0 +1,1510 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Cache Architecture: First Principles</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+<style>
+:root {
+  /* High-end Pitch Black Theme */
+  --bg: #000000;
+  --panel: #0a0a0a;
+  --border: rgba(255,255,255,0.08);
+  --border-light: rgba(255,255,255,0.15);
+  --text: #a1a1aa;
+  --text-highlight: #ededed;
+  --text-dim: #52525b;
+  
+  /* Vibrant Semantic Colors */
+  --client: #60a5fa;
+  --server: #c084fc;
+  --cache: #fbbf24;
+  --db: #34d399;
+  --req: #22d3ee;
+  --write: #facc15;
+  --inv: #f87171;
+}
+
+body {
+  font-family: 'Inter', system-ui, -apple-system, sans-serif;
+  background-color: var(--bg);
+  background-image: radial-gradient(ellipse at top, rgba(255,255,255,0.03) 0%, transparent 80%);
+  background-attachment: fixed;
+  color: var(--text);
+  margin: 0;
+  display: flex;
+  line-height: 1.6;
+  -webkit-font-smoothing: antialiased;
+}
+
+h1, h2, h3, h4 { color: var(--text-highlight); margin-top: 0; font-weight: 600; }
+h1 { font-size: 2.5rem; letter-spacing: -0.04em; margin-bottom: 0.5rem; }
+h2 { font-size: 1.75rem; letter-spacing: -0.02em; padding-bottom: 0.5rem; border-bottom: 1px solid var(--border); margin-top: 3.5rem; }
+h3 { font-size: 1.25rem; letter-spacing: -0.01em; margin-bottom: 1rem; }
+p { margin-bottom: 1.5rem; font-size: 1.05rem; }
+
+/* Focus Accessibility */
+button:focus-visible, a:focus-visible, select:focus-visible {
+  outline: 2px solid var(--client);
+  outline-offset: 2px;
+}
+
+/* Navigation */
+.sidebar {
+  position: fixed;
+  top: 0; left: 0; bottom: 0;
+  width: 260px;
+  background: rgba(5,5,5,0.7);
+  backdrop-filter: blur(24px);
+  -webkit-backdrop-filter: blur(24px);
+  border-right: 1px solid var(--border);
+  padding: 2.5rem 1rem;
+  overflow-y: auto;
+  box-sizing: border-box;
+  z-index: 100;
+}
+.sidebar h3 { margin-bottom: 1.5rem; font-size: 1.1rem; padding-left: 1rem; color: #71717a; text-transform: uppercase; letter-spacing: 0.05em; }
+.nav-link {
+  display: block;
+  padding: 0.6rem 1rem;
+  color: var(--text);
+  text-decoration: none;
+  border-radius: 8px;
+  margin-bottom: 0.25rem;
+  font-size: 0.9rem;
+  transition: all 0.2s cubic-bezier(0.25, 1, 0.5, 1);
+}
+.nav-link:hover, .nav-link.active {
+  background: rgba(255,255,255,0.06);
+  color: var(--text-highlight);
+}
+
+/* Layout */
+.content {
+  flex: 1;
+  margin-left: 260px;
+  padding: 4rem 5rem;
+  max-width: 1100px;
+  box-sizing: border-box;
+}
+
+/* Glass/Sleek Card */
+.card {
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 16px;
+  padding: 2.5rem;
+  margin-bottom: 2.5rem;
+  box-shadow: inset 0 1px 0 rgba(255,255,255,0.05), 0 8px 32px rgba(0,0,0,0.4);
+}
+
+/* 
+========================================
+SIMULATOR LAYOUT 
+========================================
+*/
+.simulator-wrapper {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  margin: 1.5rem 0;
+}
+
+/* Engineering Blueprint Grid Background */
+.architecture-container {
+  position: relative;
+  width: 100%;
+  height: 420px;
+  background-color: #050505;
+  background-image: 
+    radial-gradient(rgba(255,255,255,0.1) 1px, transparent 1px),
+    radial-gradient(rgba(255,255,255,0.04) 1px, transparent 1px);
+  background-size: 24px 24px, 96px 96px;
+  background-position: 0 0, 0 0;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  overflow: hidden;
+  box-shadow: inset 0 0 40px rgba(0,0,0,0.8);
+}
+
+/* Sleek Terminal Log */
+.event-log-container {
+  background: #000;
+  border: 1px solid var(--border);
+  border-radius: 12px; 
+  padding: 1rem 1.25rem;
+  min-height: 180px; 
+  max-height: 260px; 
+  overflow-y: auto;
+  font-family: 'JetBrains Mono', monospace; 
+  font-size: 0.85rem; 
+  color: #a1a1aa;
+  box-shadow: inset 0 2px 12px rgba(0,0,0,0.8);
+}
+
+.event-log-header {
+  display: flex; 
+  justify-content: space-between; 
+  align-items: center;
+  border-bottom: 1px solid var(--border); 
+  padding-bottom: 0.75rem; 
+  margin-bottom: 0.75rem;
+}
+
+.log-entry { 
+  display: flex; 
+  gap: 1.25rem; 
+  margin-bottom: 6px; 
+  padding-bottom: 6px; 
+  border-bottom: 1px solid rgba(255,255,255,0.05); 
+}
+.log-entry:last-child { border-bottom: none; }
+.log-time { color: #52525b; width: 65px; flex-shrink: 0; }
+.log-type { width: 110px; font-weight: 600; flex-shrink: 0; }
+.log-msg { flex-grow: 1; color: #d4d4d8; }
+
+.log-type.req { color: var(--req); }
+.log-type.cache { color: var(--cache); }
+.log-type.miss { color: var(--inv); }
+.log-type.hit { color: #4ade80; }
+.log-type.db { color: var(--db); }
+.log-type.set { color: var(--write); }
+
+.state-container { 
+  display: grid; 
+  grid-template-columns: 1fr 1fr; 
+  gap: 16px; 
+}
+@media (max-width: 900px) { 
+  .state-container { grid-template-columns: 1fr; } 
+}
+
+/* Transparent Nodes for SVGs */
+.node {
+  position: absolute;
+  width: 100px; height: 90px;
+  margin-top: -45px; margin-left: -50px; 
+  display: flex; flex-direction: column; align-items: center; justify-content: center;
+  background: transparent;
+  border: none;
+  z-index: 10;
+  cursor: default;
+}
+.node svg {
+  width: 44px; height: 44px;
+  margin-bottom: 10px;
+  filter: drop-shadow(0 4px 8px rgba(0,0,0,0.6));
+  transition: all 0.4s cubic-bezier(0.16, 1, 0.3, 1);
+}
+.node-label {
+  font-weight: 600; font-size: 0.7rem; letter-spacing: 0.08em;
+  text-transform: uppercase;
+  text-align: center;
+  line-height: 1.2;
+}
+
+.node.interactive { cursor: pointer; }
+.node.interactive:hover svg {
+  transform: scale(1.1) translateY(-2px);
+}
+
+.node.client svg { stroke: var(--client); }
+.node.interactive.client:hover svg { filter: drop-shadow(0 0 16px rgba(96,165,250,0.6)); }
+.node.client .node-label { color: var(--client); }
+
+.node.server svg { stroke: var(--server); }
+.node.interactive.server:hover svg { filter: drop-shadow(0 0 16px rgba(192,132,252,0.6)); }
+.node.server .node-label { color: var(--server); }
+
+.node.cache svg { stroke: var(--cache); }
+.node.interactive.cache:hover svg { filter: drop-shadow(0 0 16px rgba(251,191,36,0.6)); }
+.node.cache .node-label { color: var(--cache); }
+
+.node.db svg { stroke: var(--db); }
+.node.interactive.db:hover svg { filter: drop-shadow(0 0 16px rgba(52,211,153,0.6)); }
+.node.db .node-label { color: var(--db); }
+
+.node.queue svg { stroke: var(--write); }
+.node.queue .node-label { color: var(--write); }
+
+.node.cloud svg { stroke: #a78bfa; }
+.node.cloud .node-label { color: #a78bfa; }
+
+/* Beautiful Node Flashes */
+@keyframes flashHit {
+  0% { filter: drop-shadow(0 0 24px #4ade80); stroke: #4ade80; transform: scale(1.15); }
+  100% { filter: drop-shadow(0 4px 8px rgba(0,0,0,0.6)); transform: scale(1); }
+}
+.node.flash-hit svg { animation: flashHit 1.4s cubic-bezier(0.16, 1, 0.3, 1) forwards; }
+
+@keyframes flashMiss {
+  0% { filter: drop-shadow(0 0 24px #ef4444); stroke: #ef4444; transform: scale(1.15); }
+  100% { filter: drop-shadow(0 4px 8px rgba(0,0,0,0.6)); transform: scale(1); }
+}
+.node.flash-miss svg { animation: flashMiss 1.4s cubic-bezier(0.16, 1, 0.3, 1) forwards; }
+
+@keyframes flashProc {
+  0% { filter: drop-shadow(0 0 24px currentColor); transform: scale(1.15); }
+  100% { filter: drop-shadow(0 4px 8px rgba(0,0,0,0.6)); transform: scale(1); }
+}
+.node.flash-proc svg { animation: flashProc 1.4s cubic-bezier(0.16, 1, 0.3, 1) forwards; }
+
+/* Glowing Packets */
+.packet {
+  position: absolute;
+  width: 10px; height: 10px;
+  border-radius: 50%;
+  z-index: 20;
+  pointer-events: none;
+}
+.packet span {
+  position: absolute;
+  top: -26px; left: 50%;
+  transform: translateX(-50%);
+  font-size: 10px; font-weight: 500;
+  font-family: 'JetBrains Mono', monospace;
+  background: rgba(0,0,0,0.8);
+  backdrop-filter: blur(4px);
+  -webkit-backdrop-filter: blur(4px);
+  border: 1px solid var(--border-light);
+  padding: 2px 8px; border-radius: 12px;
+  color: #ededed;
+  white-space: nowrap;
+}
+
+/* Premium Buttons */
+button {
+  background: var(--text-highlight); color: #000;
+  border: none; padding: 0.6rem 1.25rem;
+  border-radius: 8px; font-weight: 500;
+  cursor: pointer; transition: all 0.2s cubic-bezier(0.25, 1, 0.5, 1);
+  margin-right: 0.5rem; margin-bottom: 0.5rem;
+  font-family: 'Inter', sans-serif; font-size: 0.9rem;
+  box-shadow: inset 0 -2px 0 rgba(0,0,0,0.2), 0 2px 8px rgba(255,255,255,0.05);
+}
+button:hover { background: #fff; transform: translateY(-1px); box-shadow: inset 0 -2px 0 rgba(0,0,0,0.2), 0 4px 12px rgba(255,255,255,0.15); }
+button:active { transform: translateY(1px); box-shadow: 0 0 0; }
+button:disabled { background: #333; color: #666; cursor: not-allowed; box-shadow: none; transform: none; }
+
+button.secondary {
+  background: rgba(255,255,255,0.05); 
+  border: 1px solid var(--border-light); 
+  color: var(--text-highlight);
+  box-shadow: none;
+}
+button.secondary:hover { background: rgba(255,255,255,0.1); box-shadow: 0 4px 12px rgba(0,0,0,0.2); }
+
+button.action-write { background: var(--write); color: #000; }
+button.action-write:hover { background: #fde047; }
+button.action-delete { background: var(--inv); color: #fff; }
+button.action-delete:hover { background: #fca5a5; }
+
+.button-group { display: flex; flex-wrap: wrap; gap: 0.5rem; margin-bottom: 1.5rem; }
+
+select {
+  background: #000; color: var(--text-highlight);
+  border: 1px solid var(--border-light); padding: 0.5rem 1rem;
+  border-radius: 8px; font-family: inherit; margin-right: 1rem;
+  font-size: 0.9rem;
+  transition: border-color 0.2s;
+}
+select:focus { border-color: var(--client); outline: none; }
+
+/* Tables */
+.table { width: 100%; border-collapse: collapse; margin: 1.5rem 0; font-size: 0.95rem; }
+.table th, .table td { padding: 1rem; border-bottom: 1px solid var(--border); text-align: left; }
+.table th { color: var(--text-highlight); font-weight: 500; font-size: 0.85rem; text-transform: uppercase; letter-spacing: 0.05em; background: rgba(255,255,255,0.02); }
+.table tr:hover td { background: rgba(255,255,255,0.015); }
+
+/* Typography & Code */
+code { 
+  background: rgba(255,255,255,0.08); 
+  padding: 0.2em 0.4em; 
+  border-radius: 4px; 
+  font-family: 'JetBrains Mono', monospace; 
+  font-size: 0.85em; 
+  color: var(--write); 
+}
+pre { 
+  background: rgba(5,5,5,0.8); 
+  padding: 1.25rem; 
+  border-radius: 12px; 
+  border: 1px solid var(--border); 
+  font-family: 'JetBrains Mono', monospace; 
+  color: #e4e4e7; 
+  font-size: 0.9rem;
+  line-height: 1.5;
+  margin-bottom: 1rem;
+  overflow-x: auto;
+}
+
+.state-panel { 
+  flex: 1; 
+  background: #000; 
+  padding: 1.25rem; 
+  border-radius: 12px; 
+  border: 1px solid var(--border); 
+  box-shadow: inset 0 2px 10px rgba(0,0,0,0.5);
+}
+.state-panel h4 { 
+  margin-top: 0; 
+  margin-bottom: 0.75rem; 
+  font-size: 0.75rem; 
+  letter-spacing: 0.05em; 
+  color: #71717a; 
+  text-transform: uppercase;
+}
+.state-panel pre { background: transparent; border: none; padding: 0; margin: 0; box-shadow: none; }
+
+.stale-highlight { color: var(--inv) !important; font-weight: bold; }
+
+/* LRU Visualizer */
+.lru-slots { display: flex; gap: 12px; margin-bottom: 1.5rem; }
+.lru-slot {
+  width: 64px; height: 64px;
+  background: #000; border: 1px solid var(--cache);
+  border-radius: 12px; display: flex; align-items: center; justify-content: center;
+  font-weight: 600; font-size: 1.25rem; color: var(--cache);
+  box-shadow: inset 0 0 16px rgba(251,191,36,0.1);
+  transition: all 0.3s cubic-bezier(0.25, 1, 0.5, 1);
+}
+.lru-empty { border-color: var(--border); box-shadow: none; color: #444; }
+
+/* Interactive Quiz */
+.quiz-option {
+  display: block; width: 100%; text-align: left;
+  background: rgba(255,255,255,0.03); border: 1px solid var(--border);
+  padding: 1.25rem; border-radius: 12px; margin-bottom: 0.75rem;
+  color: var(--text); cursor: pointer; transition: all 0.2s cubic-bezier(0.25, 1, 0.5, 1);
+  box-shadow: none;
+}
+.quiz-option:hover { background: rgba(255,255,255,0.06); transform: translateX(4px); box-shadow: none; }
+.quiz-option.correct { 
+  background: rgba(52, 211, 153, 0.1); 
+  border-color: var(--db); 
+  color: var(--db);
+}
+.quiz-option.incorrect { 
+  background: rgba(248, 113, 113, 0.1); 
+  border-color: var(--inv); 
+  color: var(--inv);
+}
+
+/* Responsive */
+@media (max-width: 900px) {
+  h1 { font-size: 2rem; }
+  h2 { font-size: 1.5rem; }
+  .sidebar { position: static; width: 100%; height: auto; border-right: none; border-bottom: 1px solid var(--border); padding: 1.5rem; backdrop-filter: none; background: #050505; }
+  .content { margin-left: 0; padding: 1.5rem; }
+  .architecture-container { height: 500px; }
+}
+</style>
+</head>
+<body>
+
+<nav class="sidebar">
+  <h3>Caching Guide</h3>
+  <a href="#intro" class="nav-link active">A. Introduction</a>
+  <a href="#basic-arch" class="nav-link">B. Basic Architecture</a>
+  <a href="#where-cache" class="nav-link">C. Where Can Caching Exist?</a>
+  <a href="#fundamentals" class="nav-link">D. Cache Fundamentals</a>
+  <a href="#read-patterns" class="nav-link">E. Read Patterns</a>
+  <a href="#write-patterns" class="nav-link">F. Write Patterns</a>
+  <a href="#invalidation" class="nav-link">G. Invalidation</a>
+  <a href="#eviction" class="nav-link">H. Eviction & TTL</a>
+  <a href="#multi-layer" class="nav-link">I. Multi-Layer Cache</a>
+  <a href="#simulator" class="nav-link">J. Request Simulator</a>
+  <a href="#failures" class="nav-link">K. Failure Scenarios</a>
+  <a href="#source-truth" class="nav-link">L. Source of Truth</a>
+  <a href="#real-world" class="nav-link">M. Real-World Example</a>
+  <a href="#interview" class="nav-link">N. Interview Prep</a>
+  <a href="#mental-model" class="nav-link">O. Final Mental Model</a>
+</nav>
+
+<main class="content">
+  
+  <section id="intro">
+    <h1>Cache Architecture: First Principles</h1>
+    <p>Welcome to this highly interactive system-design teaching tool. You are going to learn caching architectures by <strong>visually following data</strong> as it moves through a system.</p>
+    <p>A <strong>cache</strong> is a high-speed data storage layer which stores a subset of data, typically transient in nature, so that future requests for that data are served up faster than is possible by accessing the data's primary storage location. Caching allows you to efficiently reuse previously retrieved or computed data.</p>
+  </section>
+
+  <section id="basic-arch">
+    <h2>B. Basic Architecture</h2>
+    <p>In a standard web architecture, requests flow from a Client to a Server, which queries a Database. A Cache is introduced to intercept or optimize these requests. <strong>Click on the components below</strong> to understand their responsibilities.</p>
+    
+    <div class="card">
+      <div id="arch-basic-sim"></div>
+      <div id="arch-basic-info" style="margin-top: 1.5rem; padding: 1.25rem; background: #000; border: 1px solid var(--border); border-radius: 12px; display: none;">
+        <!-- Info populates here on click -->
+      </div>
+    </div>
+  </section>
+
+  <section id="where-cache">
+    <h2>C. Where Can Caching Exist?</h2>
+    <p>Caching does not just live in a single "Redis node". It can exist at almost every layer of an architecture:</p>
+    <table class="table">
+      <tr>
+        <th>Location</th>
+        <th>Description</th>
+        <th>Examples</th>
+      </tr>
+      <tr>
+        <td><strong>Client-Side</strong></td>
+        <td>The browser or mobile app stores data locally to avoid network requests entirely.</td>
+        <td>Browser HTTP Cache, Service Workers, LocalStorage</td>
+      </tr>
+      <tr>
+        <td><strong>Edge / CDN</strong></td>
+        <td>Geographically distributed servers cache static assets closer to users.</td>
+        <td>Cloudflare, AWS CloudFront</td>
+      </tr>
+      <tr>
+        <td><strong>Local Cache</strong></td>
+        <td>In-memory caching residing on the application server itself (Decentralized). Very fast, but suffers from inconsistency across multiple servers.</td>
+        <td>Guava, ConcurrentHashMap, Memcached (local)</td>
+      </tr>
+      <tr>
+        <td><strong>Distributed Cache</strong></td>
+        <td>A standalone caching tier shared by all application servers (Centralized). Solves local cache inconsistency.</td>
+        <td>Redis, Memcached</td>
+      </tr>
+    </table>
+  </section>
+
+  <section id="fundamentals">
+    <h2>D. Cache Fundamentals</h2>
+    <p>What happens when data is requested? There are two primary outcomes: a <strong>Cache Hit</strong> or a <strong>Cache Miss</strong>.</p>
+    <p>Use the controls below to visualize both scenarios. Notice that on a Cache Hit, the database is entirely bypassed.</p>
+    
+    <div class="card">
+      <div class="button-group">
+        <button onclick="runDemo('hit')">Run Cache Hit</button>
+        <button class="secondary" onclick="runDemo('miss')">Run Cache Miss</button>
+      </div>
+      <div id="arch-hitmiss-sim"></div>
+    </div>
+  </section>
+
+  <section id="read-patterns">
+    <h2>E. Read Patterns</h2>
+    <p>How does the application interact with the cache when reading data? There are two dominant patterns: <strong>Cache-Aside</strong> and <strong>Read-Through</strong>.</p>
+    
+    <div class="card">
+      <h3>1. Cache-Aside (Lazy Loading)</h3>
+      <p>The application is entirely responsible for querying the cache, and if missing, querying the database and explicitly populating the cache.</p>
+      <button onclick="runDemo('aside')">Animate Cache-Aside</button>
+      <div id="arch-aside-sim"></div>
+    </div>
+
+    <div class="card">
+      <h3>2. Read-Through</h3>
+      <p>The application treats the cache as the main data store. If there is a miss, the <strong>cache layer itself</strong> is responsible for fetching the data from the database and returning it.</p>
+      <button onclick="runDemo('readthrough')">Animate Read-Through</button>
+      <div id="arch-readthrough-sim"></div>
+    </div>
+
+    <h3>Side-by-Side Comparison</h3>
+    <table class="table">
+      <tr>
+        <th>Feature</th>
+        <th>Cache-Aside</th>
+        <th>Read-Through</th>
+      </tr>
+      <tr>
+        <td><strong>Responsibility</strong></td>
+        <td>Application code handles DB fallback</td>
+        <td>Cache abstraction handles DB fallback</td>
+      </tr>
+      <tr>
+        <td><strong>Application Complexity</strong></td>
+        <td>Higher (requires checking cache, then DB, then setting cache)</td>
+        <td>Lower (just asks the cache for data)</td>
+      </tr>
+      <tr>
+        <td><strong>Cache Awareness</strong></td>
+        <td>App is aware of both Cache and DB</td>
+        <td>App is only aware of Cache layer</td>
+      </tr>
+    </table>
+  </section>
+
+  <section id="write-patterns">
+    <h2>F. Write Patterns</h2>
+    <p>When data is updated, how do we keep the cache and database in sync? The strategy you choose drastically impacts performance and consistency.</p>
+    
+    <div class="card">
+      <h3>1. Write-Around</h3>
+      <p>Data is written directly to the database, bypassing the cache. The cache entry is invalidated. This prevents "cache pollution" for data that is written but rarely read.</p>
+      <button onclick="runDemo('writearound')">Animate Write-Around</button>
+      <div id="arch-writearound-sim"></div>
+    </div>
+
+    <div class="card">
+      <h3>2. Write-Through</h3>
+      <p>Data is written into the cache and the database <strong>synchronously</strong>. The client doesn't get a success response until both are updated. Guarantees consistency but increases write latency.</p>
+      <button onclick="runDemo('writethrough')">Animate Write-Through</button>
+      <div id="arch-writethrough-sim"></div>
+    </div>
+
+    <div class="card">
+      <h3>3. Write-Back (Write-Behind)</h3>
+      <p>Data is written to the cache alone, and the client receives immediate success. The cache asynchronously persists the data to the database later. Extremely fast, but risks <strong>data loss</strong> if the cache crashes before syncing.</p>
+      <button onclick="runDemo('writeback')">Animate Write-Back</button>
+      <div id="arch-writeback-sim"></div>
+    </div>
+
+    <h3>Write Pattern Comparison</h3>
+    <table class="table">
+      <tr>
+        <th>Pattern</th>
+        <th>Cache Updated</th>
+        <th>DB Updated</th>
+        <th>Sync / Async</th>
+        <th>Write Latency</th>
+        <th>Data Loss Risk</th>
+      </tr>
+      <tr>
+        <td><strong>Write-Around</strong></td>
+        <td>No (Invalidated)</td>
+        <td>Yes</td>
+        <td>Sync</td>
+        <td>Medium</td>
+        <td>Low</td>
+      </tr>
+      <tr>
+        <td><strong>Write-Through</strong></td>
+        <td>Yes</td>
+        <td>Yes</td>
+        <td>Sync</td>
+        <td>High</td>
+        <td>Low</td>
+      </tr>
+      <tr>
+        <td><strong>Write-Back</strong></td>
+        <td>Yes</td>
+        <td>Later</td>
+        <td>Async</td>
+        <td>Very Low</td>
+        <td>High</td>
+      </tr>
+    </table>
+  </section>
+
+  <section id="invalidation">
+    <h2>G. Cache Invalidation</h2>
+    <p><strong>Cache Invalidation</strong> means removing or updating stale cached data because the underlying source of truth (the DB) has changed.</p>
+    <div class="card">
+      <div class="state-container" style="margin-bottom: 1.5rem;">
+        <div class="state-panel">
+          <h4>DATABASE (Source of Truth)</h4>
+          <pre id="inv-db-state">user:42 = "Alice"</pre>
+        </div>
+        <div class="state-panel">
+          <h4>CACHE</h4>
+          <pre id="inv-cache-state">user:42 = "Alice"</pre>
+        </div>
+      </div>
+      <button class="action-write" onclick="runInvalidationUpdate()">1. Update DB to "Bob"</button>
+      <button class="action-delete" id="btn-invalidate" disabled onclick="runInvalidationClear()">2. Invalidate Cache</button>
+      <p id="inv-msg" style="color: var(--inv); margin-top:1rem; height: 1.5rem; font-weight: 500;"></p>
+    </div>
+  </section>
+
+  <section id="eviction">
+    <h2>H. Cache Eviction & TTL</h2>
+    <p>Do not confuse invalidation with eviction. <br>
+    - <strong>Invalidation</strong> happens when data becomes <em>incorrect/stale</em>.<br>
+    - <strong>Eviction</strong> happens when the cache <em>runs out of space</em>.</p>
+    
+    <div class="card">
+      <h3>Eviction Policy: LRU (Least Recently Used)</h3>
+      <p>When capacity is reached, the item that hasn't been accessed for the longest time is removed.</p>
+      <div class="lru-slots" id="lru-slots">
+        <div class="lru-slot">C</div>
+        <div class="lru-slot">B</div>
+        <div class="lru-slot" style="opacity: 0.3">A</div> <!-- A is oldest -->
+      </div>
+      <p style="font-size: 0.9rem; color: #888;"><em>Left is newest, right is oldest (eviction target). Capacity = 3.</em></p>
+      <div class="button-group">
+        <button onclick="lruAccess('A')">Read 'A'</button>
+        <button onclick="lruAccess('B')">Read 'B'</button>
+        <button onclick="lruAccess('C')">Read 'C'</button>
+        <button class="action-write" onclick="lruAccess('D')">Insert 'D'</button>
+      </div>
+    </div>
+
+    <div class="card">
+      <h3>TTL (Time To Live)</h3>
+      <p>TTL is an expiration mechanism. Data is automatically removed after a set time to prevent it from becoming indefinitely stale, regardless of capacity.</p>
+      <div style="display: flex; align-items: center; gap: 1rem;">
+        <div style="background: #000; padding: 1rem 2rem; border-radius: 12px; border: 1px solid var(--cache); box-shadow: inset 0 0 16px rgba(251,191,36,0.1); font-family: 'JetBrains Mono', monospace; font-size: 1.2rem;">
+          user:42 <span style="color: #444; margin: 0 0.5rem;">|</span> <span id="ttl-timer" style="color: var(--cache)">10s</span>
+        </div>
+        <button class="secondary" onclick="startTTL()">Reset TTL</button>
+      </div>
+    </div>
+  </section>
+
+  <section id="multi-layer">
+    <h2>I. Multi-Layer Cache</h2>
+    <p>Real-world systems rarely use a single cache. Requests often pass through multiple layers, stopping at the first layer that holds a cache hit.</p>
+    <div class="card">
+      <div id="arch-multi-sim"></div>
+    </div>
+  </section>
+
+  <section id="simulator">
+    <h2>J. Interactive Request Simulator</h2>
+    <p>This is your playground. Select your architecture strategies, execute requests, and use <strong>STEP MODE</strong> to meticulously observe data flow.</p>
+    
+    <div class="card">
+      <div style="display:flex; flex-wrap: wrap; gap: 1.5rem; margin-bottom: 1.5rem;">
+        <div>
+          <label style="display:block; margin-bottom:0.5rem; font-size:0.85rem; color:#888; text-transform:uppercase;">Read Strategy</label>
+          <select id="pg-read">
+            <option value="aside">Cache-Aside</option>
+            <option value="through">Read-Through</option>
+          </select>
+        </div>
+        <div>
+          <label style="display:block; margin-bottom:0.5rem; font-size:0.85rem; color:#888; text-transform:uppercase;">Write Strategy</label>
+          <select id="pg-write">
+            <option value="around">Write-Around</option>
+            <option value="through">Write-Through</option>
+            <option value="back">Write-Back</option>
+          </select>
+        </div>
+      </div>
+      
+      <div class="button-group">
+        <button onclick="pgAction('GET')">GET user:42</button>
+        <button class="action-write" onclick="pgAction('UPDATE')">UPDATE user:42 -> Bob</button>
+        <button class="action-delete" onclick="pgAction('DELETE')">DELETE user:42</button>
+        <button class="secondary" onclick="pgReset()">RESET STATE</button>
+      </div>
+      
+      <div style="display: flex; align-items: center; gap: 1rem; margin-bottom: 1.5rem; background: #000; padding: 0.75rem 1rem; border-radius: 8px; border: 1px solid var(--border);">
+        <label style="display: flex; align-items: center; gap: 0.75rem; cursor: pointer;">
+          <input type="checkbox" id="pg-step-toggle" onchange="toggleStepMode()" style="accent-color: var(--client); width: 16px; height: 16px;"> 
+          <strong style="color: var(--text-highlight);">Enable Step-by-Step Mode</strong>
+        </label>
+        <button id="pg-step-btn" disabled class="secondary" onclick="pgNextStep()" style="margin:0; margin-left: auto;">NEXT STEP</button>
+      </div>
+
+      <div id="arch-playground-sim"></div>
+
+      <div class="state-container" style="margin-top: 1.5rem;">
+        <div class="state-panel">
+          <h4>CACHE STATE</h4>
+          <pre id="pg-cache-state">{}</pre>
+        </div>
+        <div class="state-panel">
+          <h4>DB STATE</h4>
+          <pre id="pg-db-state">{"user:42": "Alice"}</pre>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <section id="failures">
+    <h2>K. Failure Scenarios</h2>
+    <p>What happens when things break? A robust system degrades gracefully.</p>
+    <div class="card">
+      <select id="failure-scenario" style="margin-bottom: 1.5rem; width: 100%; max-width: 450px;">
+        <option value="down">1. Cache is Unavailable (Cache-Aside)</option>
+        <option value="stale">2. Cache holds Stale Data (Missed Invalidation)</option>
+        <option value="writeback-crash">3. Write-Back: Cache crashes before DB sync</option>
+      </select>
+      <br>
+      <button onclick="runFailureDemo()">Simulate Failure</button>
+      <div id="arch-failures-sim"></div>
+    </div>
+  </section>
+
+  <section id="source-truth">
+    <h2>L. Cache is NOT the Source of Truth</h2>
+    <p>Unless intentionally designed as a durable primary store, you must mentally separate the roles:</p>
+    <div style="display: flex; gap: 2.5rem; justify-content: center; text-align: center; margin: 4rem 0;">
+      
+      <div style="background: rgba(52, 211, 153, 0.05); border: 1px solid rgba(52, 211, 153, 0.2); padding: 2.5rem; border-radius: 20px; width: 220px; box-shadow: inset 0 0 40px rgba(52,211,153,0.05), 0 8px 32px rgba(0,0,0,0.4);">
+        <div style="color: var(--db); margin-bottom: 1.5rem;">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" style="width: 56px; height: 56px; filter: drop-shadow(0 0 16px rgba(52,211,153,0.5));">
+            <ellipse cx="12" cy="5" rx="9" ry="3"></ellipse>
+            <path d="M21 12c0 1.66-4 3-9 3s-9-1.34-9-3"></path>
+            <path d="M3 5v14c0 1.66 4 3 9 3s9-1.34 9-3V5"></path>
+          </svg>
+        </div>
+        <strong style="color: var(--db); font-size: 1.1rem; letter-spacing: 0.05em;">DATABASE</strong>
+        <p style="font-size: 0.9rem; margin-top: 0.75rem; color: #a1a1aa; line-height: 1.5;">Persistent.<br>Source of Truth.<br>Durability is priority.</p>
+      </div>
+
+      <div style="background: rgba(251, 191, 36, 0.05); border: 1px solid rgba(251, 191, 36, 0.2); padding: 2.5rem; border-radius: 20px; width: 220px; box-shadow: inset 0 0 40px rgba(251,191,36,0.05), 0 8px 32px rgba(0,0,0,0.4);">
+        <div style="color: var(--cache); margin-bottom: 1.5rem;">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" style="width: 56px; height: 56px; filter: drop-shadow(0 0 16px rgba(251,191,36,0.5));">
+            <rect x="4" y="4" width="16" height="16" rx="2" ry="2"></rect>
+            <rect x="9" y="9" width="6" height="6"></rect>
+            <line x1="9" y1="1" x2="9" y2="4"></line><line x1="15" y1="1" x2="15" y2="4"></line>
+            <line x1="9" y1="20" x2="9" y2="23"></line><line x1="15" y1="20" x2="15" y2="23"></line>
+            <line x1="20" y1="9" x2="23" y2="9"></line><line x1="20" y1="14" x2="23" y2="14"></line>
+            <line x1="1" y1="9" x2="4" y2="9"></line><line x1="1" y1="14" x2="4" y2="14"></line>
+          </svg>
+        </div>
+        <strong style="color: var(--cache); font-size: 1.1rem; letter-spacing: 0.05em;">CACHE</strong>
+        <p style="font-size: 0.9rem; margin-top: 0.75rem; color: #a1a1aa; line-height: 1.5;">Transient.<br>Performance Layer.<br>Speed is priority.</p>
+      </div>
+      
+    </div>
+    <p style="text-align: center; color: #71717a; max-width: 600px; margin: 0 auto;"><em>Note: Write-back architectures temporarily violate this by holding the authoritative state in the cache until asynchronous persistence completes, increasing data-loss risk.</em></p>
+  </section>
+
+  <section id="real-world">
+    <h2>M. Real-World Example Walkthrough</h2>
+    <div class="card">
+      <h3>Scenario: E-Commerce <code>GET /products/123</code></h3>
+      <p>Using Node.js (API), Redis (Cache), and PostgreSQL (Database).</p>
+      <ol style="padding-left: 1.25rem;">
+        <li style="margin-bottom: 0.75rem;"><strong>First request:</strong> Client hits API. API queries Redis. Redis returns MISS. API queries PostgreSQL. Data returned. API sets data in Redis. API returns response to Client.</li>
+        <li style="margin-bottom: 0.75rem;"><strong>Second request:</strong> Client hits API. API queries Redis. Redis returns HIT. API returns response instantly. PostgreSQL is bypassed.</li>
+        <li style="margin-bottom: 0.75rem;"><strong>Admin updates price:</strong> Admin Dashboard updates PostgreSQL directly. Dashboard sends an INVALIDATE command to Redis for key <code>product:123</code>.</li>
+        <li><strong>Next request:</strong> Client hits API. Redis returns MISS. API queries PostgreSQL to get the new price. API caches new price. API returns response.</li>
+      </ol>
+    </div>
+  </section>
+
+  <section id="interview">
+    <h2>N. Interview Cheat Sheet</h2>
+    <p>Test your knowledge with these system design interview questions.</p>
+    <div class="card" id="quiz-container" style="background: transparent; border: none; box-shadow: none; padding: 0;">
+      <!-- Injected by JS -->
+    </div>
+  </section>
+
+  <section id="mental-model">
+    <h2>O. Final Mental Model</h2>
+    <div class="card" style="background: #000; border: 1px solid var(--border); box-shadow: inset 0 2px 16px rgba(0,0,0,0.8);">
+      <pre style="background: transparent; border: none; font-size: 0.95rem; overflow-x: auto; padding: 0; color: #d4d4d8;">
+READ PATH:
+Client -> Server -> Cache? 
+                     ├── [HIT]  -> Return instantly
+                     └── [MISS] -> Database -> Populate Cache -> Return
+
+WRITE PATH:
+Client -> Server -> ┌────────────────────────────────────────────────────────┐
+                    │ Write-Around  -> Database -> Invalidate Cache          │
+                    │ Write-Through -> Update Cache & Database Synchronously │
+                    │ Write-Back    -> Update Cache -> Database Asynchronously│
+                    └────────────────────────────────────────────────────────┘
+
+LIFECYCLE MANAGEMENT:
+- Invalidation : Source data changed, explicitly remove/update cache entry.
+- Eviction     : Cache is full, remove based on policy (LRU, LFU, FIFO).
+- TTL          : Time limit reached, entry naturally expires.
+      </pre>
+    </div>
+  </section>
+
+</main>
+
+<script>
+// ==========================================
+// 1. Core Animation & Logging Engine
+// ==========================================
+const colors = { 
+  req: 'var(--req)', 
+  write: 'var(--write)', 
+  inv: 'var(--inv)', 
+  data: '#ededed',
+  hit: 'var(--db)'
+};
+
+async function simMove(containerId, fromId, toId, color, labelText) {
+  const wrapper = document.getElementById(containerId);
+  if (!wrapper) return;
+  
+  let container = wrapper.querySelector('.architecture-container');
+  if (!container) container = wrapper;
+  
+  const fromNode = container.querySelector(`[data-id="${fromId}"]`);
+  const toNode = container.querySelector(`[data-id="${toId}"]`);
+  if (!fromNode || !toNode) return;
+  
+  return new Promise(resolve => {
+    const packet = document.createElement('div');
+    packet.className = 'packet';
+    packet.style.backgroundColor = color;
+    packet.style.boxShadow = `0 0 10px ${color}, 0 0 20px ${color}`;
+    
+    if (labelText) {
+      packet.innerHTML = `<span>${labelText}</span>`;
+    }
+    container.appendChild(packet);
+
+    const fromRect = fromNode.getBoundingClientRect();
+    const toRect = toNode.getBoundingClientRect();
+    const containerRect = container.getBoundingClientRect();
+
+    const startX = fromRect.left - containerRect.left + fromRect.width / 2;
+    const startY = fromRect.top - containerRect.top + fromRect.height / 2;
+    const endX = toRect.left - containerRect.left + toRect.width / 2;
+    const endY = toRect.top - containerRect.top + toRect.height / 2;
+
+    packet.style.left = `${startX}px`;
+    packet.style.top = `${startY}px`;
+
+    const prefersReducedMotion = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+    const duration = prefersReducedMotion ? 0 : 1300; // Slower, deliberate duration
+
+    if (duration === 0) {
+      packet.remove();
+      resolve();
+      return;
+    }
+
+    // Animation 1: Smooth movement across the architecture
+    const moveAnim = packet.animate([
+      { left: `${startX}px`, top: `${startY}px` },
+      { left: `${endX}px`, top: `${endY}px` }
+    ], { duration, easing: 'cubic-bezier(0.4, 0, 0.2, 1)' });
+
+    // Animation 2: Separate linear fade and scale for clean endpoints
+    packet.animate([
+      { opacity: 0, transform: 'translate(-50%, -50%) scale(0.2)', offset: 0 },
+      { opacity: 1, transform: 'translate(-50%, -50%) scale(1)', offset: 0.15 },
+      { opacity: 1, transform: 'translate(-50%, -50%) scale(1)', offset: 0.85 },
+      { opacity: 0, transform: 'translate(-50%, -50%) scale(0.2)', offset: 1 }
+    ], { duration, easing: 'linear' });
+
+    moveAnim.onfinish = () => {
+      packet.remove();
+      
+      let flashClass = 'flash-proc';
+      if (color === colors.hit) flashClass = 'flash-hit';
+      if (color === colors.inv) flashClass = 'flash-miss';
+      
+      toNode.classList.remove('flash-proc', 'flash-hit', 'flash-miss');
+      void toNode.offsetWidth;
+      toNode.classList.add(flashClass);
+      
+      resolve();
+    };
+  });
+}
+
+function flashNode(containerId, nodeId, flashClass) {
+  const wrapper = document.getElementById(containerId);
+  if (!wrapper) return;
+  let container = wrapper.querySelector('.architecture-container');
+  if (!container) container = wrapper;
+  const node = container.querySelector(`[data-id="${nodeId}"]`);
+  if (node) {
+    node.classList.remove('flash-proc', 'flash-hit', 'flash-miss');
+    void node.offsetWidth;
+    node.classList.add(flashClass);
+  }
+}
+
+const loggers = {};
+
+class Logger {
+  constructor(id) { 
+    this.id = id;
+    this.el = document.getElementById(`log-${id}`); 
+    this.startTime = Date.now();
+    this.stepCount = 0;
+    loggers[id] = this;
+  }
+  
+  log(type, msg, isStep = false) {
+    if(!this.el) return;
+    const div = document.createElement('div');
+    div.className = 'log-entry';
+    
+    let timeLabel = '';
+    if (isStep) {
+      this.stepCount++;
+      timeLabel = `STEP ${this.stepCount}`;
+    } else {
+      timeLabel = (Date.now() - this.startTime) + 'ms';
+    }
+    
+    let typeClass = 'req';
+    if(type.includes('MISS') || type.includes('ERROR') || type.includes('DEL')) typeClass = 'miss';
+    else if(type.includes('HIT') || type.includes('SUCCESS') || type === 'RESPONSE') typeClass = 'hit';
+    else if(type.includes('CACHE')) typeClass = 'cache';
+    else if(type.includes('DB') || type.includes('DATABASE')) typeClass = 'db';
+    else if(type.includes('SET') || type.includes('WRITE')) typeClass = 'set';
+    else if(type === 'INVALIDATE') typeClass = 'miss';
+    else if(type === 'WARNING') typeClass = 'set'; 
+    else if(type === 'QUEUE') typeClass = 'set';
+    
+    div.innerHTML = `
+      <div class="log-time">[${timeLabel.padStart(5, '0')}]</div>
+      <div class="log-type ${typeClass}">${type}</div>
+      <div class="log-msg">${msg}</div>
+    `;
+    this.el.appendChild(div);
+    this.el.scrollTop = this.el.scrollHeight;
+  }
+  
+  clear() { 
+    if(this.el) this.el.innerHTML = ''; 
+    this.startTime = Date.now();
+    this.stepCount = 0;
+  }
+}
+
+function clearLog(id) {
+  if (loggers[id]) loggers[id].clear();
+}
+
+const icons = {
+  client: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><rect x="5" y="2" width="14" height="20" rx="2" ry="2"></rect><line x1="12" y1="18" x2="12.01" y2="18"></line></svg>`,
+  server: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="2" width="20" height="8" rx="2" ry="2"></rect><rect x="2" y="14" width="20" height="8" rx="2" ry="2"></rect><line x1="6" y1="6" x2="6.01" y2="6"></line><line x1="6" y1="18" x2="6.01" y2="18"></line></svg>`,
+  cache: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><rect x="4" y="4" width="16" height="16" rx="2" ry="2"></rect><rect x="9" y="9" width="6" height="6"></rect><line x1="9" y1="1" x2="9" y2="4"></line><line x1="15" y1="1" x2="15" y2="4"></line><line x1="9" y1="20" x2="9" y2="23"></line><line x1="15" y1="20" x2="15" y2="23"></line><line x1="20" y1="9" x2="23" y2="9"></line><line x1="20" y1="14" x2="23" y2="14"></line><line x1="1" y1="9" x2="4" y2="9"></line><line x1="1" y1="14" x2="4" y2="14"></line></svg>`,
+  db: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><ellipse cx="12" cy="5" rx="9" ry="3"></ellipse><path d="M21 12c0 1.66-4 3-9 3s-9-1.34-9-3"></path><path d="M3 5v14c0 1.66 4 3 9 3s9-1.34 9-3V5"></path></svg>`,
+  queue: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"></circle><polyline points="12 6 12 12 16 14"></polyline></svg>`,
+  cloud: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M17.5 19H9a7 7 0 1 1 6.71-9h1.79a4.5 4.5 0 1 1 0 9Z"></path></svg>`
+};
+
+function drawArch(containerId, nodes, connections, showLog = true) {
+  const container = document.getElementById(containerId);
+  if(!container) return;
+  container.classList.add('simulator-wrapper');
+  
+  let html = `<div class="architecture-container"><svg style="position:absolute; top:0; left:0; width:100%; height:100%; pointer-events:none;">`;
+  
+  connections.forEach(conn => {
+    const fromNode = nodes.find(n => n.id === conn.from);
+    const toNode = nodes.find(n => n.id === conn.to);
+    html += `<line x1="${fromNode.left}%" y1="${fromNode.top}%" x2="${toNode.left}%" y2="${toNode.top}%" stroke="rgba(255,255,255,0.15)" stroke-width="1.5" ${conn.dashed ? 'stroke-dasharray="4,4"' : ''}/>`;
+  });
+  html += `</svg>`;
+  
+  nodes.forEach(n => {
+    let iconSvg = icons[n.type] || icons.server;
+    html += `
+      <div class="node ${n.type} ${n.interactive?'interactive':''}" data-id="${n.id}" style="top: ${n.top}%; left: ${n.left}%;">
+        ${iconSvg}
+        <div class="node-label">${n.label}</div>
+      </div>
+    `;
+  });
+  
+  html += `</div>`;
+  
+  if (showLog) {
+    html += `
+      <div class="event-log-container">
+        <div class="event-log-header">
+          <div style="display:flex; gap: 6px; align-items: center;">
+            <div style="width:10px; height:10px; border-radius:50%; background:#ef4444;"></div>
+            <div style="width:10px; height:10px; border-radius:50%; background:#eab308;"></div>
+            <div style="width:10px; height:10px; border-radius:50%; background:#22c55e;"></div>
+            <span style="margin-left: 10px; color: #71717a;">EVENT_LOG.SH</span>
+          </div>
+          <button class="secondary" style="padding: 2px 8px; font-size: 0.75rem; margin: 0; box-shadow:none;" onclick="clearLog('${containerId}')">CLEAR</button>
+        </div>
+        <div id="log-${containerId}" class="event-log-entries"></div>
+      </div>`;
+  }
+  
+  container.innerHTML = html;
+}
+
+// ==========================================
+// 2. Topology Definitions
+// ==========================================
+const stdNodes = [
+  { id: 'client', top: 15, left: 50, label: 'CLIENT', type: 'client', interactive: true },
+  { id: 'server', top: 45, left: 50, label: 'SERVER', type: 'server', interactive: true },
+  { id: 'cache', top: 80, left: 25, label: 'CACHE', type: 'cache', interactive: true },
+  { id: 'db', top: 80, left: 75, label: 'DATABASE', type: 'db', interactive: true },
+];
+const stdConns = [
+  { from: 'client', to: 'server' },
+  { from: 'server', to: 'cache' },
+  { from: 'server', to: 'db' }
+];
+
+const throughNodes = [
+  { id: 'client', top: 15, left: 50, label: 'CLIENT', type: 'client' },
+  { id: 'server', top: 40, left: 50, label: 'SERVER', type: 'server' },
+  { id: 'cache', top: 65, left: 50, label: 'CACHE', type: 'cache' },
+  { id: 'db', top: 90, left: 50, label: 'DATABASE', type: 'db' },
+];
+const throughConns = [
+  { from: 'client', to: 'server' },
+  { from: 'server', to: 'cache' },
+  { from: 'cache', to: 'db' }
+];
+
+const writebackNodes = [
+  { id: 'client', top: 12, left: 50, label: 'CLIENT', type: 'client' },
+  { id: 'server', top: 34, left: 50, label: 'SERVER', type: 'server' },
+  { id: 'cache', top: 56, left: 50, label: 'CACHE', type: 'cache' },
+  { id: 'queue', top: 78, left: 50, label: 'WRITE QUEUE', type: 'queue' },
+  { id: 'db', top: 96, left: 50, label: 'DATABASE', type: 'db' }
+];
+const writebackConns = [
+  { from: 'client', to: 'server' },
+  { from: 'server', to: 'cache' },
+  { from: 'cache', to: 'queue' },
+  { from: 'queue', to: 'db' }
+];
+
+// ==========================================
+// 3. Initialization & Basic Interactive UI
+// ==========================================
+window.onload = () => {
+  drawArch('arch-basic-sim', stdNodes, stdConns, false);
+  drawArch('arch-hitmiss-sim', stdNodes, stdConns, true);
+  drawArch('arch-aside-sim', stdNodes, stdConns, true);
+  drawArch('arch-readthrough-sim', throughNodes, throughConns, true);
+  drawArch('arch-writearound-sim', stdNodes, stdConns, true);
+  drawArch('arch-writethrough-sim', throughNodes, throughConns, true);
+  drawArch('arch-writeback-sim', writebackNodes, writebackConns, true);
+  
+  drawArch('arch-playground-sim', stdNodes, [...stdConns, {from:'cache', to:'db', dashed:true}], true); 
+  
+  const multiNodes = [
+    {id:'client', top:15, left:50, label:'CLIENT', type:'client'},
+    {id:'cdn', top:32, left:50, label:'EDGE / CDN', type:'cloud'},
+    {id:'app', top:52, left:50, label:'APP SERVER', type:'server'},
+    {id:'local', top:52, left:20, label:'LOCAL CACHE', type:'cache'},
+    {id:'dist', top:76, left:50, label:'REDIS CLUSTER', type:'cache'},
+    {id:'db', top:96, left:80, label:'DATABASE', type:'db'},
+  ];
+  const multiConns = [
+    {from:'client', to:'cdn'}, {from:'cdn', to:'app'},
+    {from:'app', to:'local'}, {from:'app', to:'dist'}, {from:'dist', to:'db'}
+  ];
+  drawArch('arch-multi-sim', multiNodes, multiConns, false);
+  drawArch('arch-failures-sim', stdNodes, stdConns, true);
+
+  setupBasicArchInteractive();
+  initQuiz();
+};
+
+function setupBasicArchInteractive() {
+  const infoData = {
+    client: "<strong>CLIENT:</strong> The origin of the request. Could be a browser or mobile app. Can also implement <em>Client-Side Caching</em> to prevent network calls entirely.",
+    server: "<strong>SERVER:</strong> The application logic. Orchestrates requests between the cache and database. Responsible for enforcing security and business rules.",
+    cache: "<strong>CACHE:</strong> High-speed volatile memory (like Redis or Memcached). Stores key-value pairs. Extremely fast but limited in capacity. Data here is transient.",
+    db: "<strong>DATABASE:</strong> The persistent source of truth. Stores data durably on disk. Slower than cache, but guarantees data isn't lost during power failures."
+  };
+  
+  document.querySelectorAll('#arch-basic-sim .node').forEach(node => {
+    node.addEventListener('click', (e) => {
+      let target = e.target;
+      while (!target.dataset.id && target !== document.body) { target = target.parentNode; }
+      const id = target.dataset.id;
+      if (id && infoData[id]) {
+        const panel = document.getElementById('arch-basic-info');
+        panel.innerHTML = infoData[id];
+        panel.style.display = 'block';
+      }
+    });
+  });
+}
+
+// ==========================================
+// 4. Fixed Scenario Demos
+// ==========================================
+async function runDemo(type) {
+  const map = {
+    'hit': { c: 'arch-hitmiss-sim', f: demoHit },
+    'miss': { c: 'arch-hitmiss-sim', f: demoMiss },
+    'aside': { c: 'arch-aside-sim', f: demoAside },
+    'readthrough': { c: 'arch-readthrough-sim', f: demoReadThrough },
+    'writearound': { c: 'arch-writearound-sim', f: demoWriteAround },
+    'writethrough': { c: 'arch-writethrough-sim', f: demoWriteThrough },
+    'writeback': { c: 'arch-writeback-sim', f: demoWriteBack }
+  };
+  const demo = map[type];
+  const log = new Logger(demo.c);
+  log.clear();
+  await demo.f(demo.c, log);
+}
+
+async function demoHit(c, log) {
+  log.log('REQUEST', 'Client → Server (GET user:42)'); await simMove(c, 'client', 'server', colors.req, 'GET');
+  log.log('CACHE', 'Server → Cache (GET user:42)'); await simMove(c, 'server', 'cache', colors.req, 'GET');
+  flashNode(c, 'cache', 'flash-hit');
+  log.log('CACHE HIT', 'Cache → Server (Alice)'); await simMove(c, 'cache', 'server', colors.hit, 'HIT');
+  log.log('RESPONSE', 'Server → Client (200 OK)'); await simMove(c, 'server', 'client', colors.data, 'DATA');
+}
+
+async function demoMiss(c, log) {
+  log.log('REQUEST', 'Client → Server (GET user:42)'); await simMove(c, 'client', 'server', colors.req, 'GET');
+  log.log('CACHE', 'Server → Cache (GET user:42)'); await simMove(c, 'server', 'cache', colors.req, 'GET');
+  flashNode(c, 'cache', 'flash-miss');
+  log.log('CACHE MISS', 'Cache Not Found'); await simMove(c, 'cache', 'server', colors.inv, 'MISS');
+  log.log('DATABASE', 'Server → DB (SELECT user:42)'); await simMove(c, 'server', 'db', colors.req, 'SELECT');
+  log.log('DATABASE', 'DB → Server (Alice)'); await simMove(c, 'db', 'server', colors.data, 'DATA');
+  log.log('CACHE SET', 'Server → Cache (user:42 = Alice)'); await simMove(c, 'server', 'cache', colors.write, 'SET');
+  log.log('RESPONSE', 'Server → Client (200 OK)'); await simMove(c, 'server', 'client', colors.data, 'DATA');
+}
+
+async function demoAside(c, log) {
+  log.log('CACHE', 'App explicitly checks Cache'); await simMove(c, 'server', 'cache', colors.req, 'GET');
+  flashNode(c, 'cache', 'flash-miss');
+  log.log('CACHE MISS', 'Cache Not Found'); await simMove(c, 'cache', 'server', colors.inv, 'MISS');
+  log.log('DATABASE', 'App explicitly queries DB'); await simMove(c, 'server', 'db', colors.req, 'SELECT');
+  await simMove(c, 'db', 'server', colors.data, 'DATA');
+  log.log('CACHE SET', 'App updates Cache'); await simMove(c, 'server', 'cache', colors.write, 'SET');
+}
+
+async function demoReadThrough(c, log) {
+  log.log('CACHE', 'App queries Cache abstraction'); await simMove(c, 'server', 'cache', colors.req, 'GET');
+  flashNode(c, 'cache', 'flash-miss');
+  log.log('DATABASE', 'Cache layer internally fetches DB'); await simMove(c, 'cache', 'db', colors.req, 'SELECT');
+  await simMove(c, 'db', 'cache', colors.data, 'DATA');
+  log.log('RESPONSE', 'Cache returns data to App'); await simMove(c, 'cache', 'server', colors.data, 'DATA');
+}
+
+async function demoWriteAround(c, log) {
+  log.log('DATABASE', 'App writes directly to DB'); await simMove(c, 'server', 'db', colors.write, 'UPDATE');
+  log.log('INVALIDATE', 'App invalidates Cache entry'); await simMove(c, 'server', 'cache', colors.inv, 'INVALIDATE');
+  flashNode(c, 'cache', 'flash-miss');
+}
+
+async function demoWriteThrough(c, log) {
+  log.log('CACHE SET', 'App writes to Cache'); await simMove(c, 'server', 'cache', colors.write, 'UPDATE');
+  log.log('DATABASE', 'Cache writes SYNCHRONOUSLY to DB'); await simMove(c, 'cache', 'db', colors.write, 'UPDATE');
+  log.log('RESPONSE', 'Success returned after DB persist'); await simMove(c, 'cache', 'server', colors.data, 'OK');
+}
+
+async function demoWriteBack(c, log) {
+  log.log('CACHE SET', 'App writes to Cache'); await simMove(c, 'server', 'cache', colors.write, 'UPDATE');
+  flashNode(c, 'cache', 'flash-hit');
+  log.log('RESPONSE', 'Cache IMMEDIATELY returns success'); await simMove(c, 'cache', 'server', colors.data, 'OK');
+  await new Promise(r => setTimeout(r, 1200));
+  log.log('QUEUE', 'Cache ASYNCHRONOUSLY pushes to Queue'); await simMove(c, 'cache', 'queue', colors.write, 'ENQUEUE');
+  log.log('DATABASE', 'Queue persists to DB'); await simMove(c, 'queue', 'db', colors.write, 'ASYNC');
+}
+
+// ==========================================
+// 5. Invalidation Demo
+// ==========================================
+function runInvalidationUpdate() {
+  document.getElementById('inv-db-state').innerText = 'user:42 = "Bob"';
+  const cacheDisplay = document.getElementById('inv-cache-state');
+  cacheDisplay.innerHTML = 'user:42 = "Alice" <span class="stale-highlight">❌ STALE</span>';
+  document.getElementById('btn-invalidate').disabled = false;
+  document.getElementById('inv-msg').innerText = "DB updated. Cache now holds stale data!";
+}
+function runInvalidationClear() {
+  document.getElementById('inv-cache-state').innerText = '(Empty)';
+  document.getElementById('btn-invalidate').disabled = true;
+  document.getElementById('inv-msg').style.color = "var(--db)";
+  document.getElementById('inv-msg').innerText = "Cache invalidated. Next read will fetch fresh data from DB.";
+  setTimeout(() => {
+    document.getElementById('inv-db-state').innerText = 'user:42 = "Alice"';
+    document.getElementById('inv-cache-state').innerText = 'user:42 = "Alice"';
+    document.getElementById('inv-msg').innerText = "";
+  }, 4000);
+}
+
+// ==========================================
+// 6. LRU Eviction & TTL
+// ==========================================
+let lruQueue = ['C', 'B', 'A'];
+const capacity = 3;
+function renderLRU() {
+  const slots = document.getElementById('lru-slots');
+  slots.innerHTML = '';
+  for(let i=0; i<capacity; i++) {
+    const div = document.createElement('div');
+    div.className = 'lru-slot';
+    if(i < lruQueue.length) {
+      div.innerText = lruQueue[i];
+      if(i === lruQueue.length -1) div.style.opacity = '0.3';
+    } else {
+      div.classList.add('lru-empty');
+      div.innerText = '-';
+    }
+    slots.appendChild(div);
+  }
+}
+function lruAccess(key) {
+  lruQueue = lruQueue.filter(k => k !== key);
+  lruQueue.unshift(key);
+  if(lruQueue.length > capacity) lruQueue.pop();
+  renderLRU();
+}
+
+let ttlInterval;
+function startTTL() {
+  clearInterval(ttlInterval);
+  let time = 10;
+  const el = document.getElementById('ttl-timer');
+  el.innerText = `${time}s`;
+  el.style.color = 'var(--cache)';
+  ttlInterval = setInterval(() => {
+    time--;
+    if(time > 0) {
+      el.innerText = `${time}s`;
+    } else {
+      el.innerText = 'EXPIRED';
+      el.style.color = 'var(--inv)';
+      clearInterval(ttlInterval);
+    }
+  }, 1000);
+}
+
+// ==========================================
+// 7. Interactive Request Simulator (Playground)
+// ==========================================
+let pgState = { db: { 'user:42': 'Alice' }, cache: {} };
+let isPgStepMode = false;
+let pgStepResolve = null;
+let pgIsRunning = false;
+
+function updatePgStateUI() {
+  document.getElementById('pg-db-state').innerText = JSON.stringify(pgState.db, null, 2);
+  const cacheEl = document.getElementById('pg-cache-state');
+  cacheEl.innerText = JSON.stringify(pgState.cache, null, 2);
+  
+  if (pgState.cache['user:42'] && pgState.cache['user:42'] !== pgState.db['user:42']) {
+    cacheEl.innerHTML = cacheEl.innerHTML.replace(`"${pgState.cache['user:42']}"`, `"${pgState.cache['user:42']}" <span class="stale-highlight">❌</span>`);
+  }
+}
+
+function pgReset() {
+  pgState = { db: { 'user:42': 'Alice' }, cache: {} };
+  updatePgStateUI();
+  clearLog('arch-playground-sim');
+}
+
+function toggleStepMode() {
+  isPgStepMode = document.getElementById('pg-step-toggle').checked;
+  if (!isPgStepMode && pgStepResolve) pgNextStep();
+}
+
+function pgNextStep() {
+  if (pgStepResolve) {
+    let r = pgStepResolve;
+    pgStepResolve = null;
+    r();
+  }
+}
+
+async function pgLogAndMove(logInstance, c, type, msg, from, to, color, label) {
+  logInstance.log(type, msg, isPgStepMode);
+  updatePgStateUI();
+  
+  if (from && to) {
+    const p = simMove(c, from, to, color, label);
+    if (isPgStepMode) {
+      document.getElementById('pg-step-btn').disabled = false;
+      await new Promise(r => pgStepResolve = r);
+      document.getElementById('pg-step-btn').disabled = true;
+    }
+    await p;
+  } else {
+    if (isPgStepMode) {
+      document.getElementById('pg-step-btn').disabled = false;
+      await new Promise(r => pgStepResolve = r);
+      document.getElementById('pg-step-btn').disabled = true;
+    }
+  }
+}
+
+async function pgAction(type) {
+  if(pgIsRunning) return;
+  pgIsRunning = true;
+  const log = new Logger('arch-playground-sim');
+  log.clear();
+  const rStrat = document.getElementById('pg-read').value;
+  const wStrat = document.getElementById('pg-write').value;
+  const c = 'arch-playground-sim';
+
+  try {
+    if (type === 'GET') {
+      await pgLogAndMove(log, c, 'REQUEST', 'Client → Server (GET user:42)', 'client', 'server', colors.req, 'GET');
+      
+      if (rStrat === 'aside') {
+        await pgLogAndMove(log, c, 'CACHE', 'Server → Cache', 'server', 'cache', colors.req, 'GET');
+        
+        if (pgState.cache['user:42']) {
+          flashNode(c, 'cache', 'flash-hit');
+          await pgLogAndMove(log, c, 'CACHE HIT', 'Data found in Cache', 'cache', 'server', colors.hit, 'HIT');
+        } else {
+          flashNode(c, 'cache', 'flash-miss');
+          await pgLogAndMove(log, c, 'CACHE MISS', 'Data not in Cache', 'cache', 'server', colors.inv, 'MISS');
+          await pgLogAndMove(log, c, 'DATABASE', 'Server → DB (SELECT)', 'server', 'db', colors.req, 'SELECT');
+          await pgLogAndMove(log, c, 'DATABASE', 'DB → Server (DATA)', 'db', 'server', colors.data, 'DATA');
+          pgState.cache['user:42'] = pgState.db['user:42'];
+          await pgLogAndMove(log, c, 'CACHE SET', 'Server populates Cache', 'server', 'cache', colors.write, 'SET');
+        }
+      } else {
+        await pgLogAndMove(log, c, 'CACHE', 'Server delegates to Cache', 'server', 'cache', colors.req, 'GET');
+        
+        if (pgState.cache['user:42']) {
+          flashNode(c, 'cache', 'flash-hit');
+          await pgLogAndMove(log, c, 'CACHE HIT', 'Data found in Cache');
+        } else {
+          flashNode(c, 'cache', 'flash-miss');
+          await pgLogAndMove(log, c, 'CACHE MISS', 'Cache fetches from DB', 'cache', 'db', colors.req, 'SELECT');
+          pgState.cache['user:42'] = pgState.db['user:42'];
+          await pgLogAndMove(log, c, 'DATABASE', 'DB → Cache (DATA)', 'db', 'cache', colors.data, 'DATA');
+        }
+        await pgLogAndMove(log, c, 'RESPONSE', 'Cache → Server (DATA)', 'cache', 'server', colors.data, 'DATA');
+      }
+      
+      await pgLogAndMove(log, c, 'RESPONSE', 'Server → Client', 'server', 'client', colors.data, 'RES');
+      
+    } else if (type === 'UPDATE') {
+      await pgLogAndMove(log, c, 'REQUEST', 'Client → Server (UPDATE -> Bob)', 'client', 'server', colors.write, 'UPDATE');
+      
+      if (wStrat === 'around') {
+        await pgLogAndMove(log, c, 'DATABASE', 'Server → DB (Bypass Cache)', 'server', 'db', colors.write, 'SET Bob');
+        pgState.db['user:42'] = 'Bob'; 
+        await pgLogAndMove(log, c, 'INVALIDATE', 'Server invalidates Cache', 'server', 'cache', colors.inv, 'DEL');
+        flashNode(c, 'cache', 'flash-miss');
+        delete pgState.cache['user:42'];
+      } else if (wStrat === 'through') {
+        await pgLogAndMove(log, c, 'CACHE SET', 'Server writes to Cache', 'server', 'cache', colors.write, 'SET Bob');
+        pgState.cache['user:42'] = 'Bob'; 
+        await pgLogAndMove(log, c, 'DATABASE', 'Cache synchronously writes DB', 'cache', 'db', colors.write, 'SET Bob');
+        pgState.db['user:42'] = 'Bob';
+      } else {
+        await pgLogAndMove(log, c, 'CACHE SET', 'Server writes to Cache', 'server', 'cache', colors.write, 'SET Bob');
+        pgState.cache['user:42'] = 'Bob'; 
+        await pgLogAndMove(log, c, 'RESPONSE', 'Server responds immediately', 'server', 'client', colors.data, 'OK');
+        await pgLogAndMove(log, c, 'DATABASE', 'Cache asynchronously syncs DB', 'cache', 'db', colors.write, 'ASYNC SET');
+        pgState.db['user:42'] = 'Bob';
+      }
+      
+      if (wStrat !== 'back') {
+        await pgLogAndMove(log, c, 'RESPONSE', 'Server → Client', 'server', 'client', colors.data, 'OK');
+      }
+      
+    } else if (type === 'DELETE') {
+      await pgLogAndMove(log, c, 'REQUEST', 'Client → Server (DELETE)', 'client', 'server', colors.inv, 'DELETE');
+      await pgLogAndMove(log, c, 'DATABASE', 'Server deletes from DB', 'server', 'db', colors.inv, 'DEL');
+      delete pgState.db['user:42']; 
+      await pgLogAndMove(log, c, 'INVALIDATE', 'Server invalidates Cache', 'server', 'cache', colors.inv, 'DEL');
+      flashNode(c, 'cache', 'flash-miss');
+      delete pgState.cache['user:42'];
+      await pgLogAndMove(log, c, 'RESPONSE', 'Server responds', 'server', 'client', colors.data, 'OK');
+    }
+  } finally {
+    updatePgStateUI();
+    pgIsRunning = false;
+  }
+}
+
+// ==========================================
+// 8. Failures Demo
+// ==========================================
+async function runFailureDemo() {
+  const scenario = document.getElementById('failure-scenario').value;
+  const c = 'arch-failures-sim';
+  const log = new Logger(c);
+  log.clear();
+  
+  if (scenario === 'down') {
+    log.log('REQUEST', 'Client → Server'); await simMove(c, 'client', 'server', colors.req, 'GET');
+    log.log('CACHE', 'Server → Cache (Timeout)'); await simMove(c, 'server', 'cache', colors.inv, 'TIMEOUT');
+    flashNode(c, 'cache', 'flash-miss');
+    log.log('DATABASE', 'Cache down, degrading to DB'); await simMove(c, 'server', 'db', colors.req, 'SELECT');
+    await simMove(c, 'db', 'server', colors.data, 'DATA');
+    log.log('RESPONSE', 'Server responds to client'); await simMove(c, 'server', 'client', colors.data, 'RES');
+  } else if (scenario === 'stale') {
+    log.log('WARNING', 'DB updated externally. Invalidation missed.');
+    log.log('REQUEST', 'Client → Server'); await simMove(c, 'client', 'server', colors.req, 'GET');
+    log.log('CACHE', 'Server → Cache'); await simMove(c, 'server', 'cache', colors.req, 'GET');
+    flashNode(c, 'cache', 'flash-hit');
+    log.log('CACHE HIT', 'Cache returns STALE data'); await simMove(c, 'cache', 'server', colors.inv, 'STALE');
+    log.log('RESPONSE', 'Client receives bad data'); await simMove(c, 'server', 'client', colors.inv, 'BAD RES');
+  } else if (scenario === 'writeback-crash') {
+    log.log('CACHE SET', 'App writes to Cache (Write-Back)'); await simMove(c, 'server', 'cache', colors.write, 'UPDATE');
+    log.log('RESPONSE', 'App confirms success to Client'); await simMove(c, 'server', 'client', colors.data, 'OK');
+    log.log('ERROR', '🔥 CACHE NODE CRASHES BEFORE SYNC 🔥');
+    flashNode(c, 'cache', 'flash-miss');
+    document.querySelector('#arch-failures-sim [data-id="cache"]').style.color = 'var(--inv)';
+    log.log('ERROR', 'Data is permanently lost.');
+    setTimeout(()=> document.querySelector('#arch-failures-sim [data-id="cache"]').style.color = '', 3000);
+  }
+}
+
+// ==========================================
+// 9. Interview Quiz
+// ==========================================
+const quizData = [
+  { q: "What happens during a cache miss?", options: ["Data is returned from cache", "The primary DB is queried", "The app crashes", "A cache eviction occurs"], correct: 1, explanation: "A cache miss means the requested data isn't in the cache, requiring a fetch from the primary source (database)." },
+  { q: "What is the primary difference between Cache-Aside and Read-Through?", options: ["Cache-Aside is faster", "Read-Through requires manual DB queries by the app", "In Read-Through, the cache abstraction handles DB fetching", "They are the same"], correct: 2, explanation: "In Read-Through, the application only talks to the cache. The cache layer itself connects to the DB on a miss." },
+  { q: "Why use Write-Around?", options: ["To prevent cache pollution for rarely read writes", "Because it's the only way to write to a DB", "To ensure 100% cache consistency", "To speed up writes"], correct: 0, explanation: "Write-Around bypasses the cache, avoiding filling the cache with data that was just written but might not be read soon." },
+  { q: "What is a major risk of Write-Back (Write-Behind)?", options: ["Slower writes", "Immediate cache pollution", "Data loss if cache fails before sync", "Database overload"], correct: 2, explanation: "Because Write-Back acknowledges the write before persisting to the DB, a crash can cause permanent data loss." },
+  { q: "Difference between Invalidation and Eviction?", options: ["They are identical", "Invalidation is due to stale data; Eviction is due to capacity limits", "Eviction only happens in Redis", "Invalidation deletes DB data"], correct: 1, explanation: "Invalidation removes data because the source of truth changed. Eviction removes data (often regardless of freshness) to make room for new items." }
+];
+
+function initQuiz() {
+  const container = document.getElementById('quiz-container');
+  quizData.forEach((item, index) => {
+    const div = document.createElement('div');
+    div.style.marginBottom = '2rem';
+    div.innerHTML = `<p><strong>Q${index+1}:</strong> ${item.q}</p>`;
+    const opts = document.createElement('div');
+    item.options.forEach((opt, i) => {
+      const btn = document.createElement('button');
+      btn.className = 'quiz-option';
+      btn.innerText = opt;
+      btn.onclick = () => handleQuizClick(btn, opts, i, item.correct, item.explanation);
+      opts.appendChild(btn);
+    });
+    div.appendChild(opts);
+    
+    const expDiv = document.createElement('div');
+    expDiv.style.display = 'none';
+    expDiv.style.marginTop = '0.5rem';
+    expDiv.style.padding = '1rem';
+    expDiv.style.borderRadius = '8px';
+    expDiv.style.borderLeft = '3px solid var(--client)';
+    expDiv.style.background = 'rgba(255,255,255,0.03)';
+    opts.expDiv = expDiv;
+    div.appendChild(expDiv);
+    
+    container.appendChild(div);
+  });
+}
+
+function handleQuizClick(btn, parent, selectedIdx, correctIdx, explanation) {
+  Array.from(parent.children).forEach(child => {
+    child.disabled = true;
+    child.style.cursor = 'default';
+  });
+  if (selectedIdx === correctIdx) {
+    btn.classList.add('correct');
+  } else {
+    btn.classList.add('incorrect');
+    parent.children[correctIdx].classList.add('correct');
+  }
+  parent.expDiv.style.display = 'block';
+  parent.expDiv.innerHTML = `<strong>Explanation:</strong> ${explanation}`;
+}
+
+// Scrollspy Navigation
+window.addEventListener('scroll', () => {
+  let current = '';
+  document.querySelectorAll('section').forEach(sec => {
+    if (window.scrollY >= sec.offsetTop - 100) {
+      current = sec.getAttribute('id');
+    }
+  });
+  document.querySelectorAll('.nav-link').forEach(li => {
+    li.classList.remove('active');
+    if (li.getAttribute('href').includes(current)) {
+      li.classList.add('active');
+    }
+  });
+});
+</script>
+</body>
+</html>
